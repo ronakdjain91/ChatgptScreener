@@ -285,4 +285,4 @@ def update_dashboard(ticker, rsi_period, ema_fast, ema_slow, macd_signal, bb_per
 
 # Run the app
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=8050)
