@@ -1,4 +1,5 @@
-import streamlit as st
+import dash
+from dash import dcc, html, Input, Output
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -17,7 +18,7 @@ def load_tickers(file="tickers.txt"):
         with open(file, "r") as f:
             return [line.strip() for line in f if line.strip()]
     except Exception as e:
-        st.error(f"Error loading tickers: {e}")
+        print(f"Error loading tickers: {e}")
         return []
 
 # -------------------------------
@@ -123,8 +124,83 @@ def generate_signals(df):
 
     return signals
 
-def plot_data(df, ticker):
-    """Plots the stock data and indicators."""
+from dash import dash_table
+
+# Initialize the Dash app
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
+server = app.server
+
+# Load tickers for dropdown
+tickers = load_tickers()
+ticker_options = [{'label': ticker, 'value': ticker} for ticker in tickers]
+
+# Define the app layout
+app.layout = html.Div([
+    html.H1("📈 Dash Stock Screener with Indicators", style={'textAlign': 'center'}),
+
+    # Main container
+    html.Div([
+        # Sidebar for controls
+        html.Div([
+            html.H2("Controls"),
+            html.Label("Select Ticker:"),
+            dcc.Dropdown(
+                id='ticker-dropdown',
+                options=ticker_options,
+                value=tickers[0] if tickers else None
+            ),
+            html.Hr(),
+            html.H3("Indicator Settings"),
+
+            html.Label("RSI Period:"),
+            dcc.Slider(id='rsi-slider', min=5, max=30, step=1, value=14, marks={i: str(i) for i in range(5, 31, 5)}),
+
+            html.Label("EMA Fast:"),
+            dcc.Slider(id='ema-fast-slider', min=5, max=50, step=1, value=12, marks={i: str(i) for i in range(5, 51, 5)}),
+
+            html.Label("EMA Slow:"),
+            dcc.Slider(id='ema-slow-slider', min=10, max=100, step=1, value=26, marks={i: str(i) for i in range(10, 101, 10)}),
+
+            html.Label("MACD Signal:"),
+            dcc.Slider(id='macd-signal-slider', min=5, max=20, step=1, value=9, marks={i: str(i) for i in range(5, 21, 5)}),
+
+            html.Label("Bollinger Period:"),
+            dcc.Slider(id='bb-period-slider', min=10, max=50, step=1, value=20, marks={i: str(i) for i in range(10, 51, 10)}),
+
+            html.Label("Bollinger Std Dev:"),
+            dcc.Slider(id='bb-std-slider', min=1, max=3, step=0.5, value=2, marks={i: str(i) for i in [1, 1.5, 2, 2.5, 3]}),
+
+            html.Label("UT Bot ATR Period:"),
+            dcc.Slider(id='ut-atr-period-slider', min=5, max=20, step=1, value=10, marks={i: str(i) for i in range(5, 21, 5)}),
+
+            html.Label("UT Bot Multiplier:"),
+            dcc.Slider(id='ut-multiplier-slider', min=0.5, max=3, step=0.1, value=1.0, marks={i: str(i) for i in [0.5, 1, 1.5, 2, 2.5, 3]}),
+
+        ], style={'width': '25%', 'float': 'left', 'padding': '10px', 'boxSizing': 'border-box'}),
+
+        # Main content area
+        html.Div([
+            html.Div([
+                html.H3(id='signals-header'),
+                html.Div(id='signals-output')
+            ]),
+            dcc.Graph(id='main-chart'),
+            html.H3("Recent Data"),
+            dash_table.DataTable(
+                id='data-table',
+                style_table={'overflowX': 'auto'},
+                style_cell={'textAlign': 'left'},
+            )
+        ], style={'width': '75%', 'float': 'right', 'padding': '10px', 'boxSizing': 'border-box'})
+    ], style={'display': 'flex', 'flexDirection': 'row'})
+])
+
+
+# -------------------------------
+# Charting function
+# -------------------------------
+def create_figure(df, ticker):
+    """Creates the Plotly figure with all charts."""
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
                         subplot_titles=(f'{ticker} Price', 'RSI', 'MACD'),
                         row_heights=[0.6, 0.2, 0.2])
@@ -151,72 +227,62 @@ def plot_data(df, ticker):
                   row=3, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], name='Signal', line=dict(color='orange', width=1)),
                   row=3, col=1)
-    fig.add_bar(x=df.index, y=df['Hist'], name='Histogram', marker_color=np.where(df['Hist'] > 0, 'green', 'red')),
+    fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name='Histogram', marker_color=np.where(df['Hist'] > 0, 'green', 'red')),
                   row=3, col=1)
 
-    fig.update_layout(height=800, showlegend=False)
-    fig.update_xaxes(rangeslider_visible=False)
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(height=800, showlegend=False, xaxis_rangeslider_visible=False)
+    return fig
 
 # -------------------------------
-# Streamlit App
+# Callbacks
 # -------------------------------
+@app.callback(
+    [Output('main-chart', 'figure'),
+     Output('signals-header', 'children'),
+     Output('signals-output', 'children'),
+     Output('data-table', 'data'),
+     Output('data-table', 'columns')],
+    [Input('ticker-dropdown', 'value'),
+     Input('rsi-slider', 'value'),
+     Input('ema-fast-slider', 'value'),
+     Input('ema-slow-slider', 'value'),
+     Input('macd-signal-slider', 'value'),
+     Input('bb-period-slider', 'value'),
+     Input('bb-std-slider', 'value'),
+     Input('ut-atr-period-slider', 'value'),
+     Input('ut-multiplier-slider', 'value')]
+)
+def update_dashboard(ticker, rsi_period, ema_fast, ema_slow, macd_signal, bb_period, bb_std, ut_atr_period, ut_multiplier):
+    if not ticker:
+        return go.Figure(), "Select a ticker", [], [], []
 
-def main():
-    """Main function to run the Streamlit app."""
-    st.set_page_config(page_title="Stock Screener", layout="wide")
-    st.title("📈 Stock Screener with Indicators")
-
-    # Sidebar for indicator settings
-    st.sidebar.header("Indicator Settings")
-    rsi_period = st.sidebar.slider("RSI Period", 5, 30, 14)
-    ema_fast = st.sidebar.slider("EMA Fast", 5, 50, 12)
-    ema_slow = st.sidebar.slider("EMA Slow", 10, 100, 26)
-    macd_signal = st.sidebar.slider("MACD Signal", 5, 20, 9)
-    bb_period = st.sidebar.slider("Bollinger Band Period", 10, 50, 20)
-    bb_std = st.sidebar.slider("Bollinger Band Std Dev", 1.0, 3.0, 2.0, 0.5)
-    ut_atr_period = st.sidebar.slider("UT Bot ATR Period", 5, 20, 10)
-    ut_multiplier = st.sidebar.slider("UT Bot Multiplier", 0.5, 3.0, 1.0, 0.1)
-
-    # Ticker selection
-    tickers = load_tickers()
-    selected = st.selectbox("Select a Ticker", tickers)
-
-    if selected:
-        # Download data
+    try:
         end = dt.date.today()
         start = end - dt.timedelta(days=365)
+        df = yf.download(ticker, start=start, end=end)
+        if df.empty:
+            return go.Figure(), f"No data for {ticker}", [html.P("Could not retrieve data.")], [], []
+    except Exception as e:
+        return go.Figure(), f"Error loading {ticker}", [html.P(str(e))], [], []
 
-        try:
-            df = yf.download(selected, start=start, end=end)
-            if df.empty:
-                st.error("No data found for this ticker. It may be delisted or the ticker symbol is incorrect.")
-                return
-        except Exception as e:
-            st.error(f"Error downloading data for {selected}: {e}")
-            return
+    df = add_indicators(df, rsi_period, ema_fast, ema_slow, macd_signal, bb_period, bb_std, ut_atr_period, ut_multiplier)
 
-        # Calculate indicators
-        df = add_indicators(df, rsi_period, ema_fast, ema_slow, macd_signal, bb_period, bb_std, ut_atr_period, ut_multiplier)
+    # Create figure
+    fig = create_figure(df.tail(200), ticker) # Plot last 200 days for clarity
 
-        # Display signals and charts
-        col1, col2 = st.columns([1, 3])
+    # Generate signals
+    signals = generate_signals(df)
+    signals_header = f"Signals for {ticker}"
+    signals_output = [html.P(s) for s in signals]
 
-        with col1:
-            st.subheader(f"Signals for {selected}")
-            signals = generate_signals(df)
-            for s in signals:
-                st.write(s)
+    # Prepare data table
+    df_display = df.tail(10).round(2).reset_index()
+    df_display['Date'] = df_display['Date'].dt.strftime('%Y-%m-%d')
+    table_data = df_display.to_dict('records')
+    table_columns = [{"name": i, "id": i} for i in df_display.columns]
 
-        with col2:
-            st.subheader("Charts")
-            plot_data(df, selected)
+    return fig, signals_header, signals_output, table_data, table_columns
 
-        # Display recent data
-        st.subheader("Recent Data")
-        st.dataframe(df.tail(10))
-
-
-if __name__ == "__main__":
-    main()
-
+# Run the app
+if __name__ == '__main__':
+    app.run(debug=True)
